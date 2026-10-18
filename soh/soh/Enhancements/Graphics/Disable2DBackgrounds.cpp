@@ -71,7 +71,8 @@ std::set<SkyboxId> skyboxIdControlList = {
 };
 
 static void SyncSkyboxTimeToCurrentTime() {
-    SOH::SetTimeSettings cmd;
+    // Synthetic scene commands still need metadata for IResource's unload trace.
+    SOH::SetTimeSettings cmd(std::make_shared<Ship::ResourceInitData>());
     cmd.settings = { 0xFF, 0xFF, static_cast<uint8_t>(gPlayState->envCtx.timeIncrement) };
     Scene_CommandTimeSettings(gPlayState, &cmd);
 }
