@@ -124,24 +124,19 @@ public class MainActivity extends SDLActivity{
         int currentVersion = BuildConfig.VERSION_CODE;
         int storedVersion = preferences.getInt("appVersion", 1);
 
-        if (!isSupportFilesMarkerCurrent()) {
-            deleteOutdatedAssets();
-        }
-
         if (currentVersion > storedVersion) {
             preferences.edit().putInt("appVersion", currentVersion).apply();
         }
     }
 
-    private void deleteOutdatedAssets() {
+    private void refreshBundledSupportFiles() {
         File targetRootFolder = getTargetRootFolder();
 
+        // These files come from the APK. ROM archives are user-generated and
+        // are retained across support updates; native version checks request
+        // re-extraction only when their format is actually incompatible.
         deleteIfExists(new File(targetRootFolder, "soh.otr"));
-        deleteIfExists(new File(targetRootFolder, "oot.otr"));
-        deleteIfExists(new File(targetRootFolder, "oot-mq.otr"));
         deleteIfExists(new File(targetRootFolder, "soh.o2r"));
-        deleteIfExists(new File(targetRootFolder, "oot.o2r"));
-        deleteIfExists(new File(targetRootFolder, "oot-mq.o2r"));
         deleteRecursiveIfExists(new File(targetRootFolder, "assets"));
         deleteIfExists(getSupportFilesMarkerFile(targetRootFolder));
     }
@@ -565,41 +560,17 @@ public class MainActivity extends SDLActivity{
     public void checkAndSetupFiles() {
         File targetRootFolder = getTargetRootFolder();
         File assetsFolder = new File(targetRootFolder, "assets");
-        // Support both .otr (9.0.x) and .o2r (9.2.x) archive formats
         File sohOtrFile = new File(targetRootFolder, "soh.o2r");
-        File sohOtrFileLegacy = new File(targetRootFolder, "soh.otr");
-        // oot.o2r / oot-mq.o2r also count; soh.o2r is not bundled, game can run with just the ROM archive
-        File ootO2rFile = new File(targetRootFolder, "oot.o2r");
-        File ootMqO2rFile = new File(targetRootFolder, "oot-mq.o2r");
 
         boolean isMissingAssets = !assetsFolder.exists() || assetsFolder.listFiles() == null || assetsFolder.listFiles().length == 0;
-        boolean isMissingSohOtr = !sohOtrFile.exists() && !sohOtrFileLegacy.exists() && !ootO2rFile.exists() && !ootMqO2rFile.exists();
+        boolean isMissingSohOtr = !sohOtrFile.isFile() || sohOtrFile.length() == 0;
 
-        if (!targetRootFolder.exists() || isMissingAssets || isMissingSohOtr) {
+        if (!targetRootFolder.exists() || isMissingAssets || isMissingSohOtr || !isSupportFilesMarkerCurrent()) {
             showSetupProgressDialog("Preparing Data Folder",
                     "Copying required support files. Please keep Ship of Harkinian open; SD cards may take a few minutes.");
             Executors.newSingleThreadExecutor().execute(() -> setupFilesInBackground(targetRootFolder));
         } else {
-            // No setup needed; but always ensure soh.o2r is present from APK assets
-            if (!sohOtrFile.exists()) {
-                Executors.newSingleThreadExecutor().execute(() -> {
-                    try {
-                        try (InputStream in = getAssets().open("soh.o2r");
-                             OutputStream out = new FileOutputStream(sohOtrFile)) {
-                            byte[] buffer = new byte[COPY_BUFFER_SIZE];
-                            int read;
-                            while ((read = in.read(buffer)) != -1) {
-                                out.write(buffer, 0, read);
-                            }
-                        }
-                    } catch (IOException e) {
-                        // not bundled, nothing to do
-                    }
-                    setupLatch.countDown();
-                });
-            } else {
-                setupLatch.countDown();
-            }
+            setupLatch.countDown();
         }
     }
 
@@ -612,6 +583,12 @@ public class MainActivity extends SDLActivity{
             dismissSetupProgressDialog();
             showStorageAccessFailure();
             return;
+        }
+
+        // Removing an older extractor tree can touch thousands of files.
+        // Keep that work off Android's main thread along with the copy.
+        if (!isSupportFilesMarkerCurrent()) {
+            refreshBundledSupportFiles();
         }
 
         migrateLegacyAppDataIfNeeded(targetRootFolder);
@@ -638,7 +615,7 @@ public class MainActivity extends SDLActivity{
             runOnUiThread(() -> Toast.makeText(this, "Error copying assets", Toast.LENGTH_LONG).show());
         }
 
-        // Copy soh.o2r from internal assets if bundled (optional)
+        // The matching support archive is required and bundled with this APK.
         try (InputStream assetIn = getAssets().open("soh.o2r")) {
             File targetOtrFile = new File(targetRootFolder, "soh.o2r");
             targetOtrFile.delete();
@@ -651,7 +628,8 @@ public class MainActivity extends SDLActivity{
             }
             runOnUiThread(() -> Toast.makeText(this, "soh.o2r copied", Toast.LENGTH_SHORT).show());
         } catch (IOException e) {
-            // soh.o2r not bundled in APK assets or copy failed; user must provide their own
+            Log.e("setupFiles", "Failed to copy bundled soh.o2r", e);
+            setupFailed = true;
         }
 
         if (setupFailed) {
