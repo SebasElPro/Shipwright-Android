@@ -89,6 +89,9 @@ public class MainActivity extends SDLActivity{
         Log.i("SoH", "onCreate start");
 
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        // Apply Android's immersive window style while support files are prepared,
+        // before the native renderer creates its fullscreen window.
+        setWindowStyle(true);
 
         preferences = getSharedPreferences("com.dishii.soh.prefs", Context.MODE_PRIVATE);
         updateCurrentDataRootPath();
