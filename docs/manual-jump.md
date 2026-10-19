@@ -1,4 +1,9 @@
-# Manual Jump: Android 9.3 handoff
+# Experimental Manual Jump preview
+
+The preview labels this option Experimental and leaves it disabled by default.
+Race lockout disables the feature and both settings interfaces. Buffered presses
+are discarded after 180 ms, when pausing (including debug pause), when player
+eligibility changes, or when leaving a scene. A new press is needed afterward.
 
 Base: `linkzenic/Shipwright-Android`, release `v9.3.0-android.1`, commit
 `547a7fd2013c2236c28ee5bfc15f4e13815f4552`. The release is on the
@@ -26,8 +31,8 @@ restores automatic vaults, regardless of the saved mode.
 
 A 180 ms buffer applies only while moving into an already detected low obstacle or short step-up
 before its native approach timer completes. It never creates a vault candidate.
-If the timer does not complete before expiry, the press resolves as a normal
-jump. Leaving the obstacle or entering an ineligible state cancels it. Buffer
+If the timer does not complete before expiry, the press is discarded.
+Leaving the obstacle or entering an ineligible state cancels it. Buffer
 time uses SDL's monotonic millisecond clock with unsigned wraparound arithmetic.
 
 Only normal untargeted grounded idle/walking/running can start a manual jump.

@@ -9,6 +9,7 @@ extern "C" {
 #include "functions.h"
 #include "variables.h"
 #include "macros.h"
+extern PlayState* gPlayState;
 
 // Existing player actions/initializer; keep their implementation and physics in z_player.c.
 void Player_Action_Idle(Player* player, PlayState* play);
@@ -33,12 +34,17 @@ static void ClearVaultPress() {
     sBufferedPlay = nullptr;
 }
 
+static bool ManualJumpEnabled() {
+    return CVarGetInteger(CVAR_MANUAL_JUMP, 0) && !CVarGetInteger(CVAR_SETTING("DisableChanges"), 0);
+}
+
 static bool ManualVaultMode() {
-    return CVarGetInteger(CVAR_MANUAL_JUMP, 0) && CVarGetInteger(CVAR_VAULT_MODE, 1) == 1;
+    return ManualJumpEnabled() && CVarGetInteger(CVAR_VAULT_MODE, 1) == 1;
 }
 
 static bool CanManualJump(Player* player, PlayState* play, Input* input) {
-    if (player != GET_PLAYER(play) || input == nullptr ||
+    if (!ManualJumpEnabled() || player == nullptr || play == nullptr || input == nullptr ||
+        player != GET_PLAYER(play) ||
         (player->actionFunc != Player_Action_Idle && player->actionFunc != Player_Action_80842180)) {
         return false;
     }
@@ -64,7 +70,19 @@ static bool CanManualJump(Player* player, PlayState* play, Input* input) {
            player->meleeWeaponState == 0 && player->itemAction == player->heldItemAction &&
            player->av2.actionVar2 == 0 && player->unk_6AD == 0 && !Player_IsZTargeting(player) &&
            !CHECK_BTN_ANY(input->cur.button, BTN_Z | BTN_R) && !Player_InBlockingCsMode(play, player) &&
-           play->csCtx.state == CS_STATE_IDLE && play->pauseCtx.state == 0 && gSaveContext.health > 0;
+           play->csCtx.state == CS_STATE_IDLE && play->pauseCtx.state == 0 && play->pauseCtx.debugState == 0 &&
+           gSaveContext.health > 0;
+}
+
+// This hook runs even while the pause menu stops player updates. Buffered input
+// must not survive a pause, scene change, interruption or elapsed input window.
+static void UpdateVaultPress() {
+    if (sVaultPressPending &&
+        (gPlayState == nullptr || gPlayState != sBufferedPlay ||
+         uint32_t(SDL_GetTicks() - sVaultPressTime) > VAULT_BUFFER_MS ||
+         !CanManualJump(sBufferedPlayer, gPlayState, &gPlayState->state.input[0]))) {
+        ClearVaultPress();
+    }
 }
 
 // This is only a buffer/intent check. The player handler still decides whether
@@ -103,6 +121,9 @@ extern "C" int ManualJump_ShouldTraverseObstacle(Player* player, PlayState* play
 static bool TryManualJump(Player* player, PlayState* play, Input* input) {
     if (CanManualJump(player, play, input)) {
         const bool pressed = CHECK_BTN_ALL(input->press.button, BTN_CUSTOM_JUMP);
+        if (sVaultPressPending && uint32_t(SDL_GetTicks() - sVaultPressTime) > VAULT_BUFFER_MS) {
+            ClearVaultPress();
+        }
         if (ManualVaultMode() && MovingIntoLowObstacle(player)) {
             // Idle's ordinary handler list omits handler 12. Reuse that
             // same native handler here rather than duplicating vault logic.
@@ -119,8 +140,6 @@ static bool TryManualJump(Player* player, PlayState* play, Input* input) {
                 if (uint32_t(SDL_GetTicks() - sVaultPressTime) <= VAULT_BUFFER_MS) {
                     return false;
                 }
-                // No native vault became eligible: resolve the deferred
-                // press as a normal jump instead of swallowing it.
             } else if (!pressed) {
                 return false;
             }
@@ -151,8 +170,10 @@ static bool TryManualJump(Player* player, PlayState* play, Input* input) {
 
 static void RegisterManualJump() {
     ClearVaultPress();
+    COND_HOOK(OnGameFrameUpdate, CVarGetInteger(CVAR_MANUAL_JUMP, 0), UpdateVaultPress);
+    COND_HOOK(OnPlayDestroy, true, ClearVaultPress);
     COND_VB_SHOULD(VB_PLAYER_AUTO_LEDGE_JUMP, CVarGetInteger(CVAR_MANUAL_JUMP, 0), {
-        if (CVarGetInteger(CVAR_MANUAL_JUMP, 0)) {
+        if (ManualJumpEnabled()) {
             *should = false;
         }
     });
@@ -160,7 +181,7 @@ static void RegisterManualJump() {
         Player* player = va_arg(args, Player*);
         PlayState* play = va_arg(args, PlayState*);
         Input* input = va_arg(args, Input*);
-        if (!*should && CVarGetInteger(CVAR_MANUAL_JUMP, 0)) {
+        if (!*should && ManualJumpEnabled()) {
             *should = TryManualJump(player, play, input);
         } else {
             ClearVaultPress();

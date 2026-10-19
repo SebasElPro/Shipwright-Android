@@ -1585,8 +1585,9 @@ void SohInputEditorWindow::DrawLinkTab() {
         if (mOpenManualJumpMenu) {
             ImGui::SetNextItemOpen(true);
         }
-        if (ImGui::CollapsingHeader("Manual Jump")) {
-            CVarCheckbox("Enable Manual Jump", CVAR_ENHANCEMENT("ManualJump"),
+        if (ImGui::CollapsingHeader("Manual Jump (Experimental)")) {
+            ImGui::BeginDisabled(CVarGetInteger(CVAR_SETTING("DisableChanges"), 0));
+            CVarCheckbox("Enable Manual Jump (Experimental)", CVAR_ENHANCEMENT("ManualJump"),
                          CheckboxOptions().Tooltip("Use the Jump binding for grounded jumps. Unchecked restores the "
                                                    "game's default automatic ledge jumps."));
             DrawButtonLine("Jump", portIndex, BTN_CUSTOM_JUMP);
@@ -1597,6 +1598,7 @@ void SohInputEditorWindow::DrawLinkTab() {
                              "into these obstacles, with a 180 ms buffer. Tall climbs and A-button climbing remain "
                              "unchanged. Manual Jump must be enabled."));
             ImGui::TextWrapped("Bind a button or key with +. Unchecked uses default jump behavior; your binding is saved.");
+            ImGui::EndDisabled();
         }
         if (mOpenManualJumpMenu) {
             ImGui::SetScrollY(0.0f);

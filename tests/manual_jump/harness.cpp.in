@@ -16,6 +16,7 @@ using f32 = float;
 #define CHECK_BTN_ANY(value, mask) ((value) & (mask))
 #define ABS(value) ((value) < 0 ? -(value) : (value))
 #define CVAR_ENHANCEMENT(name) "gEnhancements." name
+#define CVAR_SETTING(name) "gSettings." name
 #define CS_STATE_IDLE 0
 #define NA_SE_VO_LI_AUTO_JUMP 1
 #define UNK6AE_ROT_FOCUS_X 1
@@ -58,19 +59,26 @@ struct Player {
 };
 struct PlayState {
     Player* player;
-    struct { int state = 0; } csCtx, pauseCtx;
+    struct { int state = 0, debugState = 0; } csCtx, pauseCtx;
+    struct { Input input[4]; } state;
     int colCtx = 0;
 };
 #define GET_PLAYER(play) ((play)->player)
+extern "C" { PlayState* gPlayState = nullptr; }
 struct { int health = 48; } gSaveContext;
 enum { VB_PLAYER_TRY_MANUAL_JUMP, VB_PLAYER_AUTO_LEDGE_JUMP, VB_SET_STATIC_PREV_FLOOR_TYPE,
        VB_PLAYER_LIMIT_DIVE_XZ_SPEED };
 using Hook = void (*)(bool*, va_list);
 static Hook hooks[4] = {};
 static int enabled = 1, vaultMode = 0;
+static bool raceLocked = false;
+static void (*OnGameFrameUpdateHook)() = nullptr;
+static void (*OnPlayDestroyHook)() = nullptr;
+#define COND_HOOK(name, condition, callback) name##Hook = (condition) ? callback : nullptr
 static uint32_t ticks = 1000;
 static uint32_t SDL_GetTicks() { return ticks; }
 static int CVarGetInteger(const char* name, int fallback) {
+    if (strcmp(name, "gSettings.DisableChanges") == 0) return raceLocked;
     return strcmp(name, "gEnhancements.ManualJumpVaultMode") == 0 ? (vaultMode < 0 ? fallback : vaultMode) : enabled;
 }
 #define COND_VB_SHOULD(id, condition, body) \
@@ -162,6 +170,7 @@ static Input inputState;
 static void Reset() {
     p = Player{}; p.ageProperties = &p.age; p.actionFunc = Player_Action_Idle;
     play = PlayState{}; play.player = &p;
+    gPlayState = &play; raceLocked = false;
     inputState = Input{}; inputState.press.button = BTN_CUSTOM_JUMP;
     sControlInput = &inputState;
     gSaveContext.health = 48;
@@ -211,10 +220,10 @@ int main() {
     assert(!TryJump()); assert(p.actor.bgCheckFlags & BGCHECKFLAG_GROUND);
     inputState.press.button = 0; ticks += 150; p.ledgeClimbDelayTimer = 3;
     assert(TryJump()); assert(p.linearVelocity == 2.5f);
-    // Expiry resolves to an ordinary jump, not a late native vault.
+    // Expired presses are discarded, including when no player updates ran during a pause.
     Reset(); LowObstacle(1); vaultMode = 1; assert(!TryJump());
     inputState.press.button = 0; ticks += 181; p.ledgeClimbDelayTimer = 3;
-    assert(TryJump()); assert(p.linearVelocity == 5 && p.actor.velocity.y >= 6);
+    assert(!TryJump()); assert(p.actor.bgCheckFlags & BGCHECKFLAG_GROUND);
     // Moving away, standing still and lacking an actual wall never grant manual vault eligibility.
     for (int invalid = 0; invalid < 4; ++invalid) {
         Reset(); LowObstacle(); vaultMode = 1;
@@ -322,7 +331,29 @@ int main() {
     InputEdges(&edge); assert(edge.press.button == edge.cur.button);
     edge.prev = edge.cur; edge.press.button = 0; InputEdges(&edge); assert(edge.press.button == 0);
     edge.cur.button = 0; InputEdges(&edge); assert(edge.rel.button == (BTN_CUSTOM_JUMP | 0x8000));
+    Reset(); LowObstacle(1); vaultMode = 1; assert(!TryJump());
+    inputState.press.button = 0; play.pauseCtx.state = 1; ticks += 1000;
+    play.pauseCtx.state = 0; p.ledgeClimbDelayTimer = 3;
+    assert(!TryJump()); // No frame hook needed to reject an expired press.
+    inputState.press.button = BTN_CUSTOM_JUMP;
+    assert(TryJump()); // A fresh press still works after expiry.
+    Reset(); LowObstacle(1); vaultMode = 1; assert(!TryJump());
+    play.pauseCtx.state = 1; ticks += 50; OnGameFrameUpdateHook();
+    play.pauseCtx.state = 0; ticks += 50; inputState.press.button = 0; p.ledgeClimbDelayTimer = 3;
+    assert(!TryJump()); // Even a pause shorter than the buffer cancels the old press.
+    Reset(); LowObstacle(1); vaultMode = 1; assert(!TryJump());
+    play.pauseCtx.debugState = 1; OnGameFrameUpdateHook(); play.pauseCtx.debugState = 0;
+    inputState.press.button = 0; p.ledgeClimbDelayTimer = 3; assert(!TryJump());
+    Reset(); LowObstacle(1); vaultMode = 1; assert(!TryJump());
+    gPlayState = nullptr; OnGameFrameUpdateHook(); gPlayState = &play;
+    inputState.press.button = 0; p.ledgeClimbDelayTimer = 3; assert(!TryJump());
+    Reset(); LowObstacle(1); vaultMode = 1; assert(!TryJump());
+    OnPlayDestroyHook(); inputState.press.button = 0; p.ledgeClimbDelayTimer = 3; assert(!TryJump());
+    Reset(); raceLocked = true; assert(!TryJump());
+    p.actor.bgCheckFlags = BGCHECKFLAG_GROUND_LEAVE; p.linearVelocity = 6;
+    func_8083AA10(&p, &play); assert(p.actor.velocity.y > 0); // Race lockout restores vanilla auto jumps.
     puts("PASS: manual jump policy, stationary/moving impulses, no repeat/double jump, ledge fall/grab,");
     puts("      disabled vanilla behavior, special water dive and 32-bit press/release edges.");
     puts("      native vaults/short step-ups, priority, 180 ms buffer, cancellation and preserved tall/A/water climbing.");
+    puts("      expired and paused input cancellation, scene cleanup, fresh presses and race lockout.");
 }

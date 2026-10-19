@@ -571,11 +571,10 @@ void SohMenu::AddMenuSettings() {
     path.sidebarName = "Controls";
     path.column = SECTION_COLUMN_1;
     AddSidebarEntry("Settings", "Controls", 2);
-    AddWidget(path, "Manual Jump", WIDGET_CVAR_CHECKBOX)
+    AddWidget(path, "Manual Jump (Experimental)", WIDGET_CVAR_CHECKBOX)
         .CVar(CVAR_ENHANCEMENT("ManualJump"))
-        .RaceDisable(false)
-        .Options(CheckboxOptions().Tooltip("Enable grounded jumps with your Jump binding. Unchecked restores default "
-                                          "automatic ledge jumps. Configure the button in Manual Jump Bindings."));
+        .Options(CheckboxOptions().Tooltip("Experimental: enable grounded jumps with your Jump binding. Disabled by "
+                                          "default and during race lockout. Configure the button in Manual Jump Bindings."));
     AddWidget(path, "Manual Jump Bindings", WIDGET_BUTTON)
         .Callback([](WidgetInfo& info) {
             auto window = std::dynamic_pointer_cast<SohInputEditorWindow>(
