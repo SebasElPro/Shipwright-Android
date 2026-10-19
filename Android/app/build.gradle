@@ -1,6 +1,6 @@
 def buildAsLibrary = project.hasProperty('BUILD_AS_LIBRARY');
 def buildAsApplication = !buildAsLibrary
-def androidAppVersionName = "9.3.1-android.1"
+def androidAppVersionName = "9.3.1-android.2"
 def sohConfigFile = (project.findProperty('sohConfigFile') ?: "shipofharkinian.json").toString()
 if (buildAsApplication) {
     apply plugin: 'com.android.application'
@@ -22,7 +22,7 @@ android {
         }
         minSdkVersion 24
         targetSdkVersion 33
-        versionCode 18
+        versionCode 19
         versionName androidAppVersionName
     }
     signingConfigs {
@@ -135,10 +135,35 @@ tasks.configureEach { task ->
 
 // Use the matching Torch YAML and support archive, never the legacy XML extractor.
 def supportArchive = providers.gradleProperty("sohSupportArchive").orElse("../../build-host-tools/soh/soh.o2r")
+def extractorVersionFile = layout.buildDirectory.file("generated/extractorVersion/extractor.version")
+tasks.register("generateExtractorVersion") {
+    inputs.dir("../../soh/assets/yml")
+    outputs.file(extractorVersionFile)
+    doLast {
+        def root = file("../../soh/assets/yml").toPath()
+        def digest = java.security.MessageDigest.getInstance("SHA-256")
+        byte[] buffer = new byte[65536]
+        fileTree(root.toFile()).files.sort { a, b ->
+            root.relativize(a.toPath()).toString() <=> root.relativize(b.toPath()).toString()
+        }.each { asset ->
+            digest.update(root.relativize(asset.toPath()).toString().replace('\\', '/').getBytes("UTF-8"))
+            digest.update((byte) 0)
+            asset.withInputStream { input ->
+                int count
+                while ((count = input.read(buffer)) != -1) digest.update(buffer, 0, count)
+            }
+        }
+        def output = extractorVersionFile.get().asFile
+        output.parentFile.mkdirs()
+        output.text = digest.digest().encodeHex().toString() + "\n"
+    }
+}
 tasks.register("prepareAndroidSupportAssets", Sync) {
+    dependsOn("generateExtractorVersion")
     into layout.buildDirectory.dir("generated/sohSupportAssets")
     from("../../soh/assets/yml") { into "assets" }
     from("src/main/assets/gamecontrollerdb.txt")
+    from(extractorVersionFile)
     from(provider { file(supportArchive.get()) }) { rename { "soh.o2r" } }
     doFirst {
         if (!file(supportArchive.get()).isFile()) {

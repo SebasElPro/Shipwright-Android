@@ -37,6 +37,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Check extractor setup versioning
+        run: |
+          javac -d "$RUNNER_TEMP/soh-setup-tests" Android/app/src/main/java/com/dishii/soh/ExtractorAssetState.java tests/android_setup/ExtractorAssetStateTest.java
+          java -cp "$RUNNER_TEMP/soh-setup-tests" com.dishii.soh.ExtractorAssetStateTest
+          python3 tests/bombchu_bowling/run.py
       - uses: actions/cache@v4
         with:
           path: |

@@ -77,7 +77,7 @@ public class MainActivity extends SDLActivity{
     private static final int TOUCH_FACE_BUTTON_LAYOUT_BAYX = 1;
     private static final int TOUCH_FACE_BUTTON_LAYOUT_GAMECUBE = 2;
     private static final String SUPPORT_FILES_VERSION_MARKER = ".android_support_files_version";
-    // Bump this only when bundled Android support assets or archive layout changes.
+    // Bump only for support archive/layout changes. Extractor YAML is content-versioned separately.
     private static final String SUPPORT_FILES_VERSION = "soh-9.3.1-torch-support-2";
     private AlertDialog dataRootMigrationDialog;
     private AlertDialog setupProgressDialog;
@@ -140,7 +140,6 @@ public class MainActivity extends SDLActivity{
         // re-extraction only when their format is actually incompatible.
         deleteIfExists(new File(targetRootFolder, "soh.otr"));
         deleteIfExists(new File(targetRootFolder, "soh.o2r"));
-        deleteRecursiveIfExists(new File(targetRootFolder, "assets"));
         deleteIfExists(getSupportFilesMarkerFile(targetRootFolder));
     }
 
@@ -187,7 +186,7 @@ public class MainActivity extends SDLActivity{
         }
     }
 
-    private void deleteRecursiveIfExists(File dir) {
+    private void deleteRecursiveIfExists(File dir) throws IOException {
         if (dir.exists()) {
             deleteRecursive(dir);
             Log.i("deleteAssets", "Deleted directory: " + dir.getAbsolutePath());
@@ -196,16 +195,23 @@ public class MainActivity extends SDLActivity{
         }
     }
 
-    private void deleteRecursive(File fileOrDirectory) {
+    private void deleteRecursive(File fileOrDirectory) throws IOException {
         if (fileOrDirectory.isDirectory()) {
             File[] children = fileOrDirectory.listFiles();
-            if (children != null) {
-                for (File child : children) {
-                    deleteRecursive(child);
-                }
+            if (children == null) {
+                throw new IOException("Unable to list bundled asset directory: " + fileOrDirectory);
+            }
+            for (File child : children) {
+                deleteRecursive(child);
             }
         }
-        fileOrDirectory.delete();
+        deleteRequiredFile(fileOrDirectory);
+    }
+
+    private void deleteRequiredFile(File file) throws IOException {
+        if (file.exists() && !file.delete()) {
+            throw new IOException("Unable to refresh bundled support file: " + file);
+        }
     }
 
     private File getTargetRootFolder() {
@@ -568,7 +574,8 @@ public class MainActivity extends SDLActivity{
         boolean isMissingAssets = !assetsFolder.exists() || assetsFolder.listFiles() == null || assetsFolder.listFiles().length == 0;
         boolean isMissingSohOtr = !sohOtrFile.isFile() || sohOtrFile.length() == 0;
 
-        if (!targetRootFolder.exists() || isMissingAssets || isMissingSohOtr || !isSupportFilesMarkerCurrent()) {
+        if (!targetRootFolder.exists() || isMissingAssets || isMissingSohOtr || !isSupportFilesMarkerCurrent()
+                || !ExtractorAssetState.isCurrent(targetRootFolder, getBundledExtractorVersion())) {
             showSetupProgressDialog("Preparing Data Folder",
                     "Copying required support files. Please keep Ship of Harkinian open; SD cards may take a few minutes.");
             Executors.newSingleThreadExecutor().execute(() -> setupFilesInBackground(targetRootFolder));
@@ -577,6 +584,17 @@ public class MainActivity extends SDLActivity{
         }
     }
 
+    private String getBundledExtractorVersion() {
+        try (InputStream input = getAssets().open("extractor.version")) {
+            byte[] bytes = new byte[128];
+            int count = input.read(bytes);
+            String revision = count > 0 ? new String(bytes, 0, count, java.nio.charset.StandardCharsets.UTF_8).trim() : "";
+            return revision.matches("[0-9a-f]{64}") ? revision : null;
+        } catch (IOException e) {
+            Log.e("setupFiles", "Missing bundled extractor revision", e);
+            return null;
+        }
+    }
 
     private void setupFilesInBackground(File targetRootFolder) {
         boolean setupFailed = false;
@@ -588,8 +606,15 @@ public class MainActivity extends SDLActivity{
             return;
         }
 
-        // Removing an older extractor tree can touch thousands of files.
-        // Keep that work off Android's main thread along with the copy.
+        String extractorVersion = getBundledExtractorVersion();
+        if (extractorVersion == null) {
+            dismissSetupProgressDialog();
+            showSetupFailure("The bundled extractor version is missing. Please install a complete APK build.");
+            return;
+        }
+        // Read legacy state before refreshing its support marker. Code/shader-only
+        // updates must not delete and recopy over 20,000 unchanged YAML files.
+        boolean copyExtractor = ExtractorAssetState.needsCopy(targetRootFolder, extractorVersion);
         if (!isSupportFilesMarkerCurrent()) {
             refreshBundledSupportFiles();
         }
@@ -607,11 +632,20 @@ public class MainActivity extends SDLActivity{
         // Copy assets/ from internal
         File targetAssetsDir = new File(targetRootFolder, "assets");
         try {
-            if (!targetAssetsDir.exists() && !targetAssetsDir.mkdirs()) {
-                throw new IOException("Failed to create assets folder: " + targetAssetsDir.getAbsolutePath());
+            if (copyExtractor) {
+                // Invalidate first: an interrupted copy must never look complete.
+                deleteRequiredFile(getSupportFilesMarkerFile(targetRootFolder));
+                deleteRequiredFile(new File(targetRootFolder, ExtractorAssetState.MARKER));
+                deleteRecursiveIfExists(targetAssetsDir);
+                if (!targetAssetsDir.mkdirs() && !targetAssetsDir.isDirectory()) {
+                    throw new IOException("Failed to create assets folder: " + targetAssetsDir.getAbsolutePath());
+                }
+                AssetCopyUtil.copyAssetsToExternal(this, "assets", targetAssetsDir.getAbsolutePath());
+                Log.i("setupFiles", "Extractor files copied for revision " + extractorVersion);
+            } else {
+                Log.i("setupFiles", "Reusing unchanged extractor files");
             }
-            AssetCopyUtil.copyAssetsToExternal(this, "assets", targetAssetsDir.getAbsolutePath());
-            runOnUiThread(() -> Toast.makeText(this, "Assets copied", Toast.LENGTH_SHORT).show());
+            ExtractorAssetState.markComplete(targetRootFolder, extractorVersion);
         } catch (IOException e) {
             e.printStackTrace();
             setupFailed = true;
@@ -619,20 +653,23 @@ public class MainActivity extends SDLActivity{
         }
 
         // The matching support archive is required and bundled with this APK.
-        try (InputStream assetIn = getAssets().open("soh.o2r")) {
-            File targetOtrFile = new File(targetRootFolder, "soh.o2r");
-            targetOtrFile.delete();
-            try (OutputStream out = new FileOutputStream(targetOtrFile)) {
-                byte[] buffer = new byte[COPY_BUFFER_SIZE];
-                int read;
-                while ((read = assetIn.read(buffer)) != -1) {
-                    out.write(buffer, 0, read);
+        File supportArchive = new File(targetRootFolder, "soh.o2r");
+        if (!isSupportFilesMarkerCurrent() || !supportArchive.isFile() || supportArchive.length() == 0) {
+            try (InputStream assetIn = getAssets().open("soh.o2r")) {
+                File targetOtrFile = new File(targetRootFolder, "soh.o2r");
+                targetOtrFile.delete();
+                try (OutputStream out = new FileOutputStream(targetOtrFile)) {
+                    byte[] buffer = new byte[COPY_BUFFER_SIZE];
+                    int read;
+                    while ((read = assetIn.read(buffer)) != -1) {
+                        out.write(buffer, 0, read);
+                    }
                 }
+                runOnUiThread(() -> Toast.makeText(this, "soh.o2r copied", Toast.LENGTH_SHORT).show());
+            } catch (IOException e) {
+                Log.e("setupFiles", "Failed to copy bundled soh.o2r", e);
+                setupFailed = true;
             }
-            runOnUiThread(() -> Toast.makeText(this, "soh.o2r copied", Toast.LENGTH_SHORT).show());
-        } catch (IOException e) {
-            Log.e("setupFiles", "Failed to copy bundled soh.o2r", e);
-            setupFailed = true;
         }
 
         if (setupFailed) {

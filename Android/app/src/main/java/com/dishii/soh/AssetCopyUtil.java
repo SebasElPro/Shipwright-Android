@@ -13,13 +13,20 @@ public class AssetCopyUtil {
 
     public static void copyAssetsToExternal(Context context, String assetsFolderPath, String externalFolderPath) throws IOException {
         AssetManager assetManager = context.getAssets();
-        String[] assetFiles = assetManager.list(assetsFolderPath);
+        copyAssets(assetManager, assetsFolderPath, externalFolderPath,
+                assetManager.list(assetsFolderPath), new byte[64 * 1024]);
+    }
+
+    private static void copyAssets(AssetManager assetManager, String assetsFolderPath,
+                                   String externalFolderPath, String[] assetFiles, byte[] buffer) throws IOException {
+        if (assetFiles == null) throw new IOException("Unable to list bundled assets: " + assetsFolderPath);
 
         for (String assetFile : assetFiles) {
             String assetPath = assetsFolderPath + File.separator + assetFile;
             String externalPath = externalFolderPath + File.separator + assetFile;
 
-            if (assetManager.list(assetPath).length > 0) {
+            String[] children = assetManager.list(assetPath);
+            if (children != null && children.length > 0) {
                 // It's a directory
                 // Check if the directory exists in the external storage
                 File externalDir = new File(externalPath);
@@ -28,7 +35,7 @@ public class AssetCopyUtil {
                 }
 
                 // Recursively copy contents of the directory
-                copyAssetsToExternal(context, assetPath, externalPath);
+                copyAssets(assetManager, assetPath, externalPath, children, buffer);
             } else {
                 // It's a file
                 File externalFile = new File(externalPath);
@@ -45,7 +52,6 @@ public class AssetCopyUtil {
                         }
                         out = new FileOutputStream(externalFile);
 
-                        byte[] buffer = new byte[1024];
                         int read;
                         while ((read = in.read(buffer)) != -1) {
                             out.write(buffer, 0, read);
