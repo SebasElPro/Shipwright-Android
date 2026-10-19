@@ -1,0 +1,31 @@
+#include <cassert>
+#include <functional>
+using s32 = int;
+struct PlayState { int bombchuBowlingStatus = 0; };
+static PlayState* gPlayState = nullptr;
+static bool enabled = true, hookEnabled = false;
+static int ammo = 20;
+static constexpr s32 CUCCO_BOWLING_AMMO_DEFAULT = 10;
+#define CVAR_BOWLING_VALUE enabled
+#define CVAR_BOWLING_AMMO_VALUE ammo
+static std::function<void(bool*)> ammoHook;
+#define COND_VB_SHOULD(id, condition, ...) do { hookEnabled = (condition); ammoHook = [](bool* should) { __VA_ARGS__ }; } while (0)
+
+@FUNCTION@
+
+int main() {
+    RegisterBombchuBowlingAmmo();
+    assert(hookEnabled); // Nondefault saved ammo at the title screen is safe.
+    PlayState play; gPlayState = &play;
+    RegisterBombchuBowlingAmmo();
+    assert(play.bombchuBowlingStatus == 0); // Registration must not start a minigame.
+    bool should = true; ammoHook(&should);
+    assert(!should && play.bombchuBowlingStatus == 20);
+    ammo = 30; RegisterBombchuBowlingAmmo();
+    assert(play.bombchuBowlingStatus == 30); // Preserve live adjustment.
+    play.bombchuBowlingStatus = 0; ammo = 40; RegisterBombchuBowlingAmmo();
+    assert(play.bombchuBowlingStatus == 0); // Finished games stay finished.
+    gPlayState = nullptr; ammo = 50; RegisterBombchuBowlingAmmo();
+    enabled = false; RegisterBombchuBowlingAmmo();
+    assert(!hookEnabled);
+}
